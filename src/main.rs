@@ -1,19 +1,13 @@
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::hash::Hash;
-use std::io::{Write, BufWriter};
+use std::io::{Write, BufWriter,BufRead, BufReader};
 use std::sync::{Arc, Mutex};
 extern crate crossbeam;
 use crossbeam::channel::unbounded;
-use graphlib::Graph;
 use std::fs::File;
-use std::io::{BufRead, BufReader,Write};
 use rayon::prelude::*;
-use bincode::{serialize_into, deserialize_from};
-use rayon::prelude::*;
-use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize)]
 struct Pair {
     first: i64,
     second: i64,
@@ -234,33 +228,18 @@ fn process() {
     let file = File::open("C:\\Users\\evana\\Desktop\\Connect3\\input.txt").unwrap();
     let reader = BufReader::new(file);
     let mut output = File::create("data.bin").unwrap();
-    let (pair_sender, pair_reciever) = unbounded::<(i64, i64)>();
-    reader
-        .lines()
-        .par_lines() // Parallel processing
-        .for_each(|line| {
-            if let Ok(line) = line {
-                let pair_sender_clone = pair_sender.clone();
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() == 2 {
-                    let a : i64 = parts[0].parse().unwrap();
-                    let b : i64 = parts[1].parse().unwrap();
-                    pair_sender_clone.send((a,b));
-                }
+    let mut n : u32 = 0;
+    for line in reader.lines() {
+        if let Ok(line) = line {
+            n += 1;
+            if (n % 5000000 == 0) {
+                println!("{}",n);
             }
-        });
-    loop {
-        match pair_reciever.recv() {
-            Ok((a, b)) => {
-                output.write_all(&a.to_le_bytes());
-                output.write_all(&b.to_le_bytes());
-            }
-            Err(_) => {
-                break;
-            }
+            let substrings: Vec<&str> = line.split_whitespace().collect();
+            output.write_all(&substrings[0].parse::<u64>().unwrap().to_le_bytes());
+            output.write_all(&substrings[1].parse::<u64>().unwrap().to_le_bytes());
         }
-    }   
-    println!("test")
+    }
 }
 
 fn main() {
