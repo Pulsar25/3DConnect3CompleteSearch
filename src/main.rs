@@ -7,9 +7,10 @@ extern crate crossbeam;
 use crossbeam::channel::unbounded;
 use graphlib::Graph;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{BufRead, BufReader,Write};
 use rayon::prelude::*;
 use bincode::{serialize_into, deserialize_from};
+use rayon::prelude::*;
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
@@ -232,16 +233,11 @@ fn _number_to_board(mut num: i64) -> Game {
 fn process() {
     let file = File::open("C:\\Users\\evana\\Desktop\\Connect3\\input.txt").unwrap();
     let reader = BufReader::new(file);
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(true)
-        .open("data.bin")
-        .unwrap();
+    let mut output = File::create("data.bin").unwrap();
     let (pair_sender, pair_reciever) = unbounded::<(i64, i64)>();
     reader
         .lines()
-        .par_bridge() // Parallel processing
+        .par_lines() // Parallel processing
         .for_each(|line| {
             if let Ok(line) = line {
                 let pair_sender_clone = pair_sender.clone();
@@ -256,7 +252,8 @@ fn process() {
     loop {
         match pair_reciever.recv() {
             Ok((a, b)) => {
-                serialize_into(&mut output, &(a,b));
+                output.write_all(&a.to_le_bytes());
+                output.write_all(&b.to_le_bytes());
             }
             Err(_) => {
                 break;
@@ -315,17 +312,13 @@ fn _generate() {
         handles.push(handle);
     }
     println!("All Threads Spawned");
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("output.txt")
-        .expect("Failed to open file");
+    let mut file = File::create("data.bin").unwrap();
     println!("Starting File");
     loop {
         match result_queue_receiver.recv() {
             Ok((a, b)) => {
-                writeln!(&mut file, "{} {}", a.to_string(), b.to_string()).unwrap();
+                file.write_all(&a.to_le_bytes());
+                file.write_all(&b.to_le_bytes());
             }
             Err(_) => {
                 println!("stupid!");
