@@ -1,12 +1,10 @@
 use std::collections::HashSet;
-use std::fs::OpenOptions;
 use std::hash::Hash;
-use std::io::{Write, BufWriter,BufRead, BufReader};
+use std::io::{Write, BufRead, BufReader,Read};
 use std::sync::{Arc, Mutex};
 extern crate crossbeam;
 use crossbeam::channel::unbounded;
 use std::fs::File;
-use rayon::prelude::*;
 
 struct Pair {
     first: i64,
@@ -224,7 +222,42 @@ fn _number_to_board(mut num: i64) -> Game {
     return output;
 }
 
-fn process() {
+fn solve() {
+    let mut file = File::open("data.bin").unwrap();
+    let mut buffer = [0; 4]; // Assuming i32 integers, each takes 4 bytes
+    let mut n : u32 = 0;
+    while let Ok(_) = file.read_exact(&mut buffer) {
+        n += 1;
+        if (n % 1000000 == 0) {
+            println!("{}",n);
+        }
+        let num1 = u32::from_le_bytes(buffer); // Read first number
+        file.read_exact(&mut buffer).unwrap(); // Read next 4 bytes for second number
+        let num2 = u32::from_le_bytes(buffer); // Read second number
+    }
+}
+
+fn write_unique() {
+    let mut file = File::open("data.bin").unwrap();
+    let mut write_file = File::create("pairs.bin").unwrap();
+    let mut buffer = [0; 8]; // Assuming i32 integers, each takes 4 bytes
+    let mut seen : HashSet<u64> = HashSet::new();
+    while let Ok(_) = file.read_exact(&mut buffer) {
+        let num1 = u64::from_le_bytes(buffer); // Read first number
+        file.read_exact(&mut buffer).unwrap(); // Read next 4 bytes for second number
+        let num2 = u64::from_le_bytes(buffer); // Read second number
+        if !seen.contains(&num2) {
+            seen.insert(num2);
+            write_file.write_all(&num2.to_le_bytes());
+        }
+    }
+}
+
+fn main() {
+    write_unique();
+}
+
+fn _process() {
     let file = File::open("C:\\Users\\evana\\Desktop\\Connect3\\input.txt").unwrap();
     let reader = BufReader::new(file);
     let mut output = File::create("data.bin").unwrap();
@@ -236,14 +269,10 @@ fn process() {
                 println!("{}",n);
             }
             let substrings: Vec<&str> = line.split_whitespace().collect();
-            output.write_all(&substrings[0].parse::<u64>().unwrap().to_le_bytes());
-            output.write_all(&substrings[1].parse::<u64>().unwrap().to_le_bytes());
+            let _ = output.write_all(&substrings[0].parse::<u64>().unwrap().to_le_bytes());
+            let _ = output.write_all(&substrings[1].parse::<u64>().unwrap().to_le_bytes());
         }
     }
-}
-
-fn main() {
-    process();
 }
 
 fn _generate() {
@@ -296,8 +325,8 @@ fn _generate() {
     loop {
         match result_queue_receiver.recv() {
             Ok((a, b)) => {
-                file.write_all(&a.to_le_bytes());
-                file.write_all(&b.to_le_bytes());
+                let _ = file.write_all(&a.to_le_bytes());
+                let _ = file.write_all(&b.to_le_bytes());
             }
             Err(_) => {
                 println!("stupid!");
