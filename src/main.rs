@@ -565,7 +565,7 @@ fn _process() {
     }
 }
 
-fn _generate() {
+fn generate() {
     let seen: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut handles = Vec::new();
     let (work_queue_sender, work_queue_receiver) = unbounded::<Game>();
