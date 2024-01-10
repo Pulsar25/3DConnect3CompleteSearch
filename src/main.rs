@@ -266,7 +266,7 @@ fn write_unique() {
         let num2 = u64::from_le_bytes(buffer);
         if !seen.contains(&num2) {
             seen.insert(num2);
-            write_file.write_all(&num2.to_le_bytes());
+            let  _ = write_file.write_all(&num2.to_le_bytes());
         }
     }
 }
@@ -327,7 +327,7 @@ fn get_move_between_board(b1: u64, b2: u64) -> i8 {
     log_base_3(diff as f64) as i8
 }
 
-fn is_full(g : &Game) -> bool {
+fn is_full(g: &Game) -> bool {
     for x in 0..3 {
         for y in 0..3 {
             for z in 0..3 {
@@ -359,24 +359,27 @@ fn minimax_tree() {
                     let player = board.player;
                     if is_over(&board) {
                         let winner = switch_player(player);
-                        game_value_clone.lock().unwrap().insert(num_to_process, winner);
-                        let _ = result_queue_sender.send((num_to_process,-1,winner));
+                        game_value_clone
+                            .lock()
+                            .unwrap()
+                            .insert(num_to_process, winner);
+                        let _ = result_queue_sender.send((num_to_process, -1, winner));
                         continue;
                     }
                     if is_full(&board) {
                         game_value_clone.lock().unwrap().insert(num_to_process, 0);
-                        let _ = result_queue_sender.send((num_to_process,-1,0));
+                        let _ = result_queue_sender.send((num_to_process, -1, 0));
                         continue;
                     }
                     let next_game_nums: Vec<u64> = get_all_next_numbers(board);
-                    let mut hasOne: bool = false;
-                    let mut hasTwo: bool = false;
-                    let mut hasTie: bool = false;
-                    let mut oneGame: Option<u64> = None;
-                    let mut twoGame: Option<u64> = None;
-                    let mut tieGame: Option<u64> = None;
-                    let mut chosenGame: Option<u64> = None;
-                    let mut chosenMove: i8 = -1;
+                    let mut has_one: bool = false;
+                    let mut has_two: bool = false;
+                    let mut has_tie: bool = false;
+                    let mut one_game: Option<u64> = None;
+                    let mut two_game: Option<u64> = None;
+                    let mut tie_game: Option<u64> = None;
+                    let mut chosen_game: Option<u64> = None;
+                    let mut chosen_move: i8 = -1;
                     let mut unfinished: bool = false;
                     for num in next_game_nums {
                         let gv = game_value_clone.lock().unwrap();
@@ -386,18 +389,18 @@ fn minimax_tree() {
                                 unfinished = true;
                                 work_queue_sender.send(num_to_process);
                                 break;
-                            },
+                            }
                             0 => {
-                                hasTie = true;
-                                tieGame = Some(num);
+                                has_tie = true;
+                                tie_game = Some(num);
                             }
                             1 => {
-                                hasOne = true;
-                                oneGame = Some(num);
+                                has_one = true;
+                                one_game = Some(num);
                             }
                             2 => {
-                                hasTwo = true;
-                                twoGame = Some(num);
+                                has_two = true;
+                                two_game = Some(num);
                             }
                             _ => panic!("Value Non Normal"),
                         }
@@ -408,44 +411,44 @@ fn minimax_tree() {
                     let mut result: i8 = -1;
                     match player {
                         1 => {
-                            if hasOne {
+                            if has_one {
                                 game_value_clone.lock().unwrap().insert(num_to_process, 1);
-                                chosenGame = oneGame;
+                                chosen_game = one_game;
                                 result = 1;
-                            } else if hasTie {
+                            } else if has_tie {
                                 game_value_clone.lock().unwrap().insert(num_to_process, 0);
-                                chosenGame = tieGame;
+                                chosen_game = tie_game;
                                 result = 0;
-                            } else if hasTwo {
+                            } else if has_two {
                                 game_value_clone.lock().unwrap().insert(num_to_process, 2);
-                                chosenGame = twoGame;
+                                chosen_game = two_game;
                                 result = 2;
                             }
                         }
                         2 => {
-                            if hasTwo {
+                            if has_two {
                                 game_value_clone.lock().unwrap().insert(num_to_process, 2);
-                                chosenGame = twoGame;
+                                chosen_game = two_game;
                                 result = 2;
-                            } else if hasTie {
+                            } else if has_tie {
                                 game_value_clone.lock().unwrap().insert(num_to_process, 0);
-                                chosenGame = tieGame;
+                                chosen_game = tie_game;
                                 result = 0;
-                            } else if hasOne {
+                            } else if has_one {
                                 game_value_clone.lock().unwrap().insert(num_to_process, 1);
-                                chosenGame = oneGame;
+                                chosen_game = one_game;
                                 result = 1
                             }
                         }
                         _ => panic!("Player Non Normal"),
                     }
-                    if chosenGame.is_some() {
-                        chosenMove = get_move_between_board(num_to_process, chosenGame.unwrap());
+                    if chosen_game.is_some() {
+                        chosen_move = get_move_between_board(num_to_process, chosen_game.unwrap());
                     } else {
-                        println!("STATE: {}{}",num_to_process,(hasOne || hasTwo || hasTie));
+                        println!("STATE: {}{}", num_to_process, (has_one || has_two || has_tie));
                         panic!("Chose non-existent state")
                     }
-                    result_queue_sender.send((num_to_process, chosenMove, result));
+                    let _ = result_queue_sender.send((num_to_process, chosen_move, result));
                 }
                 Err(_) => break,
             }
@@ -459,40 +462,39 @@ fn minimax_tree() {
     const CHUNK_SIZE: usize = 8;
     let mut buffer = [0u8; CHUNK_SIZE];
     let work_queue_sender_clone = work_queue_sender.clone();
-    let reader_handle = std::thread::spawn(move ||
-        loop {
-            let chunk_position = if position >= CHUNK_SIZE as i64 {
-                position - CHUNK_SIZE as i64
-            } else {
-                0
-            };
+    let reader_handle = std::thread::spawn(move || loop {
+        let chunk_position = if position >= CHUNK_SIZE as i64 {
+            position - CHUNK_SIZE as i64
+        } else {
+            0
+        };
 
-            file.seek(SeekFrom::Start(chunk_position as u64)).unwrap();
+        file.seek(SeekFrom::Start(chunk_position as u64)).unwrap();
 
-            let bytes_to_read = if position >= CHUNK_SIZE as i64 {
-                CHUNK_SIZE
-            } else {
-                position as usize
-            };
+        let bytes_to_read = if position >= CHUNK_SIZE as i64 {
+            CHUNK_SIZE
+        } else {
+            position as usize
+        };
 
-            let bytes_read = file.read(&mut buffer).unwrap();
-            if bytes_read == 0 {
-                break; // Reached the beginning of the file
-            }
-            
-            let _ = work_queue_sender_clone.send(u64::from_le_bytes(buffer));
+        let bytes_read = file.read(&mut buffer).unwrap();
+        if bytes_read == 0 {
+            break; // Reached the beginning of the file
+        }
 
-            position -= bytes_read as i64;
-            if position <= 0 {
-                break; // Ensure we don't read beyond the beginning of the file
-            }
-        });
+        let _ = work_queue_sender_clone.send(u64::from_le_bytes(buffer));
+
+        position -= bytes_read as i64;
+        if position <= 0 {
+            break; // Ensure we don't read beyond the beginning of the file
+        }
+    });
     let mut output = File::create("output.bin").unwrap();
     let mut n: u32 = 0;
     loop {
         match result_queue_receiver.recv() {
             Ok((a, b, c)) => {
-                n += 1;           
+                n += 1;
                 if (n % 5000000 == 0) {
                     println!("{}", n);
                 }
@@ -525,8 +527,24 @@ fn minimax_tree() {
     println!("Done");
 }
 
+fn read_output_to_text() {
+    let mut file = File::open("C:/Users/evana/Desktop/Connect3/output.bin").unwrap();
+    let mut output = File::create("output.txt").unwrap();
+    let mut buffer = [0; 10];
+    let mut seen: HashSet<u64> = HashSet::new();
+    while let Ok(_) = file.read_exact(&mut buffer) {
+        let mut int64_bytes: [u8; 8] = Default::default();
+        int64_bytes.copy_from_slice(&buffer[0..8]);
+        let state_num = u64::from_le_bytes(int64_bytes);
+        let next_move : i8 = buffer[8] as i8;
+        let game_value : i8 = buffer[9] as i8;
+        let content = state_num.to_string() + &" " + &next_move.to_string() + &" " + &game_value.to_string() + &"\n";
+        output.write_all(content.as_bytes()).unwrap();
+    }
+}
+
 fn main() {
-    minimax_tree();
+    read_output_to_text();
 }
 
 fn _process() {
