@@ -6,11 +6,6 @@ extern crate crossbeam;
 use crossbeam::channel::unbounded;
 use std::fs::{File, OpenOptions};
 
-struct Pair {
-    first: i64,
-    second: i64,
-}
-
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 struct Board {
     data: [[[i8; 3]; 3]; 3],
@@ -240,21 +235,6 @@ fn number_to_board(mut num: u64) -> Game {
     return output;
 }
 
-fn solve() {
-    let mut file = File::open("data.bin").unwrap();
-    let mut buffer = [0; 8];
-    let mut n: u32 = 0;
-    while let Ok(_) = file.read_exact(&mut buffer) {
-        n += 1;
-        if (n % 1000000 == 0) {
-            println!("{}", n);
-        }
-        let num1 = u64::from_le_bytes(buffer);
-        file.read_exact(&mut buffer).unwrap();
-        let num2 = u64::from_le_bytes(buffer);
-    }
-}
-
 fn write_unique() {
     let mut file = File::open("data.bin").unwrap();
     let mut write_file = File::create("unique.bin").unwrap();
@@ -307,16 +287,16 @@ fn write_bit_at_position(file_path: &str, position: u64, value: bool) -> std::io
     Ok(())
 }
 
-fn log_base_3(x: f64) -> f64 {
-    let result = (x.ln() / 3f64.ln());
-    result
-}
-
 fn get_all_next_numbers(g: Game) -> Vec<u64> {
     get_all_next_states(g.board, g.player)
         .iter()
         .map(|x| board_to_number(x))
         .collect()
+}
+
+fn log_base_3(x: f64) -> f64 {
+    let result = (x.ln() / 3f64.ln());
+    result
 }
 
 fn get_move_between_board(b1: u64, b2: u64) -> i8 {
@@ -387,7 +367,7 @@ fn minimax_tree() {
                         match value {
                             -1 => {
                                 unfinished = true;
-                                work_queue_sender.send(num_to_process);
+                                let _ = work_queue_sender.send(num_to_process);
                                 break;
                             }
                             0 => {
