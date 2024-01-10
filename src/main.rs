@@ -246,7 +246,7 @@ fn write_unique() {
         let num2 = u64::from_le_bytes(buffer);
         if !seen.contains(&num2) {
             seen.insert(num2);
-            let  _ = write_file.write_all(&num2.to_le_bytes());
+            let _ = write_file.write_all(&num2.to_le_bytes());
         }
     }
 }
@@ -425,7 +425,11 @@ fn minimax_tree() {
                     if chosen_game.is_some() {
                         chosen_move = get_move_between_board(num_to_process, chosen_game.unwrap());
                     } else {
-                        println!("STATE: {}{}", num_to_process, (has_one || has_two || has_tie));
+                        println!(
+                            "STATE: {}{}",
+                            num_to_process,
+                            (has_one || has_two || has_tie)
+                        );
                         panic!("Chose non-existent state")
                     }
                     let _ = result_queue_sender.send((num_to_process, chosen_move, result));
@@ -448,15 +452,12 @@ fn minimax_tree() {
         } else {
             0
         };
-
         file.seek(SeekFrom::Start(chunk_position as u64)).unwrap();
-
         let bytes_to_read = if position >= CHUNK_SIZE as i64 {
             CHUNK_SIZE
         } else {
             position as usize
         };
-
         let bytes_read = file.read(&mut buffer).unwrap();
         if bytes_read == 0 {
             break; // Reached the beginning of the file
@@ -475,7 +476,7 @@ fn minimax_tree() {
         match result_queue_receiver.recv() {
             Ok((a, b, c)) => {
                 n += 1;
-                if (n % 5000000 == 0) {
+                if n % 10000000 == 0 {
                     println!("{}", n);
                 }
                 let _ = output.write_all(&a.to_le_bytes());
@@ -516,18 +517,23 @@ fn read_output_to_text() {
         let mut int64_bytes: [u8; 8] = Default::default();
         int64_bytes.copy_from_slice(&buffer[0..8]);
         let state_num = u64::from_le_bytes(int64_bytes);
-        let next_move : i8 = buffer[8] as i8;
-        let game_value : i8 = buffer[9] as i8;
-        let content = state_num.to_string() + &" " + &next_move.to_string() + &" " + &game_value.to_string() + &"\n";
+        let next_move: i8 = buffer[8] as i8;
+        let game_value: i8 = buffer[9] as i8;
+        let content = state_num.to_string()
+            + &" "
+            + &next_move.to_string()
+            + &" "
+            + &game_value.to_string()
+            + &"\n";
         output.write_all(content.as_bytes()).unwrap();
     }
 }
 
 fn main() {
-    read_output_to_text();
+    
 }
 
-fn _process() {
+fn process() {
     let file = File::open("C:\\Users\\evana\\Desktop\\Connect3\\input.txt").unwrap();
     let reader = BufReader::new(file);
     let mut output = File::create("data.bin").unwrap();
@@ -535,7 +541,7 @@ fn _process() {
     for line in reader.lines() {
         if let Ok(line) = line {
             n += 1;
-            if (n % 5000000 == 0) {
+            if (n % 10000000 == 0) {
                 println!("{}", n);
             }
             let substrings: Vec<&str> = line.split_whitespace().collect();
