@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::io::{Write, BufRead, BufReader,Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 extern crate crossbeam;
 use crossbeam::channel::unbounded;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 
 struct Pair {
     first: i64,
@@ -68,6 +68,20 @@ fn get_all_next_states(g: Board, player: i8) -> Vec<Board> {
     output
 }
 
+fn _get_num_open_spaces(g: &Game) -> i8 {
+    let mut output: i8 = 0;
+    for x in 0..3 {
+        for y in 0..3 {
+            for z in 0..3 {
+                if g.board.data[x][y][z] == 0 {
+                    output += 1;
+                }
+            }
+        }
+    }
+    return output;
+}
+
 fn check_win_direction(
     g: &Game,
     x: i8,
@@ -120,20 +134,6 @@ fn check_win_direction(
         }
     }
     return false;
-}
-
-fn _get_num_open_spaces(g: &Game) -> i8 {
-    let mut output: i8 = 0;
-    for x in 0..3 {
-        for y in 0..3 {
-            for z in 0..3 {
-                if g.board.data[x][y][z] == 0 {
-                    output += 1;
-                }
-            }
-        }
-    }
-    return output;
 }
 
 fn is_over(g: &Game) -> bool {
@@ -197,55 +197,73 @@ fn is_over(g: &Game) -> bool {
     return false;
 }
 
-fn board_to_number(g: Game) -> i64 {
-    let mut output: i64 = 0;
+fn game_to_number(g: Game) -> u64 {
+    let mut output: u64 = 0;
     for x in 0..3 {
         for y in 0..3 {
             for z in 0..3 {
-                output += (g.board.data[x][y][z] as i64) * 3_i64.pow((x + 3 * y + 9 * z) as u32);
+                output += (g.board.data[x][y][z] as u64) * 3_u64.pow((x + 3 * y + 9 * z) as u32);
             }
         }
     }
     return output;
 }
 
-fn _number_to_board(mut num: i64) -> Game {
+fn board_to_number(g: &Board) -> u64 {
+    let mut output: u64 = 0;
+    for x in 0..3 {
+        for y in 0..3 {
+            for z in 0..3 {
+                output += (g.data[x][y][z] as u64) * 3_u64.pow((x + 3 * y + 9 * z) as u32);
+            }
+        }
+    }
+    return output;
+}
+
+fn number_to_board(mut num: u64) -> Game {
     let mut output: Game = Game {
         board: make_new_board(),
         player: 1,
     };
+    let mut pieces: i8 = 0;
     for power in 0..27 {
-        output.board.data[power % 3][power / 3][power / 9] = (num % 3) as i8;
+        let value = (num % 3) as i8;
+        if value != 0 {
+            pieces += 1;
+        }
+        output.board.data[power % 3][(power / 3) % 3][power / 9] = value;
         num -= num % 3;
         num /= 3;
     }
+    output.player = (pieces % 2) + 1;
     return output;
 }
 
 fn solve() {
     let mut file = File::open("data.bin").unwrap();
-    let mut buffer = [0; 4]; // Assuming i32 integers, each takes 4 bytes
-    let mut n : u32 = 0;
+    let mut buffer = [0; 8];
+    let mut n: u32 = 0;
     while let Ok(_) = file.read_exact(&mut buffer) {
         n += 1;
         if (n % 1000000 == 0) {
-            println!("{}",n);
+            println!("{}", n);
         }
-        let num1 = u32::from_le_bytes(buffer); // Read first number
-        file.read_exact(&mut buffer).unwrap(); // Read next 4 bytes for second number
-        let num2 = u32::from_le_bytes(buffer); // Read second number
+        let num1 = u64::from_le_bytes(buffer);
+        file.read_exact(&mut buffer).unwrap();
+        let num2 = u64::from_le_bytes(buffer);
     }
 }
 
 fn write_unique() {
     let mut file = File::open("data.bin").unwrap();
-    let mut write_file = File::create("pairs.bin").unwrap();
-    let mut buffer = [0; 8]; // Assuming i32 integers, each takes 4 bytes
-    let mut seen : HashSet<u64> = HashSet::new();
+    let mut write_file = File::create("unique.bin").unwrap();
+    let mut buffer = [0; 8];
+    let mut seen: HashSet<u64> = HashSet::new();
     while let Ok(_) = file.read_exact(&mut buffer) {
-        let num1 = u64::from_le_bytes(buffer); // Read first number
-        file.read_exact(&mut buffer).unwrap(); // Read next 4 bytes for second number
-        let num2 = u64::from_le_bytes(buffer); // Read second number
+        let num1 = u64::from_le_bytes(buffer);
+        file.read_exact(&mut buffer).unwrap();
+        let num2 = u64::from_le_bytes(buffer);
         if !seen.contains(&num2) {
             seen.insert(num2);
             write_file.write_all(&num2.to_le_bytes());
@@ -253,20 +271,274 @@ fn write_unique() {
     }
 }
 
+fn read_bit_at_position(file_path: &str, position: u64) -> std::io::Result<bool> {
+    let mut file = OpenOptions::new().read(true).open(file_path)?;
+
+    file.seek(SeekFrom::Start(position / 8))?;
+
+    let mut buffer = [0u8; 1];
+    file.read_exact(&mut buffer)?;
+
+    let byte = buffer[0];
+    let bit_position = position % 8;
+    let bit_value = byte & (1 << (7 - bit_position));
+
+    Ok(bit_value != 0)
+}
+
+fn write_bit_at_position(file_path: &str, position: u64, value: bool) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().read(true).write(true).open(file_path)?;
+
+    file.seek(SeekFrom::Start(position / 8))?;
+
+    let mut buffer = [0u8; 1];
+    file.read_exact(&mut buffer)?;
+
+    let bit_position = position % 8;
+    if value {
+        buffer[0] |= 1 << (7 - bit_position);
+    } else {
+        buffer[0] &= !(1 << (7 - bit_position));
+    }
+
+    file.seek(SeekFrom::Start(position / 8))?;
+    file.write_all(&buffer)?;
+
+    Ok(())
+}
+
+fn log_base_3(x: f64) -> f64 {
+    let result = (x.ln() / 3f64.ln());
+    result
+}
+
+fn get_all_next_numbers(g: Game) -> Vec<u64> {
+    get_all_next_states(g.board, g.player)
+        .iter()
+        .map(|x| board_to_number(x))
+        .collect()
+}
+
+fn get_move_between_board(b1: u64, b2: u64) -> i8 {
+    let mut diff = b2 - b1;
+    if diff % 2 == 0 {
+        diff /= 2;
+    }
+    log_base_3(diff as f64) as i8
+}
+
+fn is_full(g : &Game) -> bool {
+    for x in 0..3 {
+        for y in 0..3 {
+            for z in 0..3 {
+                if g.board.data[x][y][z] == 0 {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn minimax_tree() {
+    let game_value: Arc<Mutex<HashMap<u64, i8>>> = Arc::new(Mutex::new(HashMap::new()));
+    let (work_queue_sender, work_queue_receiver) = unbounded::<u64>();
+    let (result_queue_sender, result_queue_receiver) = unbounded::<(u64, i8, i8)>();
+    let mut handles = Vec::new();
+    let n_threads = 16;
+    for i in 0..n_threads {
+        let work_queue_receiver = work_queue_receiver.clone();
+        let work_queue_sender = work_queue_sender.clone();
+        let result_queue_sender = result_queue_sender.clone();
+        let game_value_clone = game_value.clone();
+        println!("Spawing Thread: {}", (i + 1).to_string());
+        let handle = std::thread::spawn(move || loop {
+            match work_queue_receiver.recv() {
+                Ok(num_to_process) => {
+                    let board: Game = number_to_board(num_to_process);
+                    let player = board.player;
+                    if is_over(&board) {
+                        let winner = switch_player(player);
+                        game_value_clone.lock().unwrap().insert(num_to_process, winner);
+                        let _ = result_queue_sender.send((num_to_process,-1,winner));
+                        continue;
+                    }
+                    if is_full(&board) {
+                        game_value_clone.lock().unwrap().insert(num_to_process, 0);
+                        let _ = result_queue_sender.send((num_to_process,-1,0));
+                        continue;
+                    }
+                    let next_game_nums: Vec<u64> = get_all_next_numbers(board);
+                    let mut hasOne: bool = false;
+                    let mut hasTwo: bool = false;
+                    let mut hasTie: bool = false;
+                    let mut oneGame: Option<u64> = None;
+                    let mut twoGame: Option<u64> = None;
+                    let mut tieGame: Option<u64> = None;
+                    let mut chosenGame: Option<u64> = None;
+                    let mut chosenMove: i8 = -1;
+                    let mut unfinished: bool = false;
+                    for num in next_game_nums {
+                        let gv = game_value_clone.lock().unwrap();
+                        let value = gv.get(&num).unwrap_or(&-1);
+                        match value {
+                            -1 => {
+                                unfinished = true;
+                                work_queue_sender.send(num_to_process);
+                                break;
+                            },
+                            0 => {
+                                hasTie = true;
+                                tieGame = Some(num);
+                            }
+                            1 => {
+                                hasOne = true;
+                                oneGame = Some(num);
+                            }
+                            2 => {
+                                hasTwo = true;
+                                twoGame = Some(num);
+                            }
+                            _ => panic!("Value Non Normal"),
+                        }
+                    }
+                    if unfinished {
+                        continue;
+                    }
+                    let mut result: i8 = -1;
+                    match player {
+                        1 => {
+                            if hasOne {
+                                game_value_clone.lock().unwrap().insert(num_to_process, 1);
+                                chosenGame = oneGame;
+                                result = 1;
+                            } else if hasTie {
+                                game_value_clone.lock().unwrap().insert(num_to_process, 0);
+                                chosenGame = tieGame;
+                                result = 0;
+                            } else if hasTwo {
+                                game_value_clone.lock().unwrap().insert(num_to_process, 2);
+                                chosenGame = twoGame;
+                                result = 2;
+                            }
+                        }
+                        2 => {
+                            if hasTwo {
+                                game_value_clone.lock().unwrap().insert(num_to_process, 2);
+                                chosenGame = twoGame;
+                                result = 2;
+                            } else if hasTie {
+                                game_value_clone.lock().unwrap().insert(num_to_process, 0);
+                                chosenGame = tieGame;
+                                result = 0;
+                            } else if hasOne {
+                                game_value_clone.lock().unwrap().insert(num_to_process, 1);
+                                chosenGame = oneGame;
+                                result = 1
+                            }
+                        }
+                        _ => panic!("Player Non Normal"),
+                    }
+                    if chosenGame.is_some() {
+                        chosenMove = get_move_between_board(num_to_process, chosenGame.unwrap());
+                    } else {
+                        println!("STATE: {}{}",num_to_process,(hasOne || hasTwo || hasTie));
+                        panic!("Chose non-existent state")
+                    }
+                    result_queue_sender.send((num_to_process, chosenMove, result));
+                }
+                Err(_) => break,
+            }
+        });
+        handles.push(handle);
+    }
+    println!("All Threads Spawned");
+    let mut file = File::open("C:/Users/evana/Desktop/Connect3/src/unique.bin").unwrap();
+    let file_size = file.metadata().unwrap().len();
+    let mut position = file_size as i64;
+    const CHUNK_SIZE: usize = 8;
+    let mut buffer = [0u8; CHUNK_SIZE];
+    let work_queue_sender_clone = work_queue_sender.clone();
+    let reader_handle = std::thread::spawn(move ||
+        loop {
+            let chunk_position = if position >= CHUNK_SIZE as i64 {
+                position - CHUNK_SIZE as i64
+            } else {
+                0
+            };
+
+            file.seek(SeekFrom::Start(chunk_position as u64)).unwrap();
+
+            let bytes_to_read = if position >= CHUNK_SIZE as i64 {
+                CHUNK_SIZE
+            } else {
+                position as usize
+            };
+
+            let bytes_read = file.read(&mut buffer).unwrap();
+            if bytes_read == 0 {
+                break; // Reached the beginning of the file
+            }
+            
+            let _ = work_queue_sender_clone.send(u64::from_le_bytes(buffer));
+
+            position -= bytes_read as i64;
+            if position <= 0 {
+                break; // Ensure we don't read beyond the beginning of the file
+            }
+        });
+    let mut output = File::create("output.bin").unwrap();
+    let mut n: u32 = 0;
+    loop {
+        match result_queue_receiver.recv() {
+            Ok((a, b, c)) => {
+                n += 1;           
+                if (n % 5000000 == 0) {
+                    println!("{}", n);
+                }
+                let _ = output.write_all(&a.to_le_bytes());
+                let _ = output.write_all(&b.to_le_bytes());
+                let _ = output.write_all(&c.to_le_bytes());
+            }
+            Err(_) => {
+                println!("stupid!");
+                let mut to_break: bool = true;
+                for handle in &handles {
+                    if !handle.is_finished() {
+                        to_break = false;
+                        break;
+                    }
+                }
+                if to_break {
+                    break;
+                }
+            }
+        }
+    }
+    println!("Writing Finished");
+    reader_handle.join().unwrap();
+    work_queue_sender.send(0);
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    drop(work_queue_sender);
+    println!("Done");
+}
+
 fn main() {
-    write_unique();
+    minimax_tree();
 }
 
 fn _process() {
     let file = File::open("C:\\Users\\evana\\Desktop\\Connect3\\input.txt").unwrap();
     let reader = BufReader::new(file);
     let mut output = File::create("data.bin").unwrap();
-    let mut n : u32 = 0;
+    let mut n: u32 = 0;
     for line in reader.lines() {
         if let Ok(line) = line {
             n += 1;
             if (n % 5000000 == 0) {
-                println!("{}",n);
+                println!("{}", n);
             }
             let substrings: Vec<&str> = line.split_whitespace().collect();
             let _ = output.write_all(&substrings[0].parse::<u64>().unwrap().to_le_bytes());
@@ -276,10 +548,10 @@ fn _process() {
 }
 
 fn _generate() {
-    let seen: Arc<Mutex<HashSet<i64>>> = Arc::new(Mutex::new(HashSet::new()));
+    let seen: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut handles = Vec::new();
     let (work_queue_sender, work_queue_receiver) = unbounded::<Game>();
-    let (result_queue_sender, result_queue_receiver) = unbounded::<(i64, i64)>();
+    let (result_queue_sender, result_queue_receiver) = unbounded::<(u64, u64)>();
     let _ = work_queue_sender.send(Game {
         board: make_new_board(),
         player: 1,
@@ -295,7 +567,7 @@ fn _generate() {
             match work_queue_receiver.recv() {
                 Ok(state_to_process) => {
                     let mut seen_set = shared_set_clone.lock().unwrap();
-                    let state_to_process_num = board_to_number(state_to_process.clone());
+                    let state_to_process_num = board_to_number(&state_to_process.board);
                     if !is_over(&state_to_process) {
                         for next_state in
                             get_all_next_states(state_to_process.board, state_to_process.player)
@@ -304,7 +576,7 @@ fn _generate() {
                                 board: next_state,
                                 player: switch_player(state_to_process.player),
                             };
-                            let next_game_num = board_to_number(next_game.clone());
+                            let next_game_num = board_to_number(&next_game.board);
                             if seen_set.contains(&next_game_num) {
                                 continue;
                             }
