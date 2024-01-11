@@ -324,16 +324,55 @@ fn minimax_tree() {
     let game_value: Arc<Mutex<HashMap<u64, i8>>> = Arc::new(Mutex::new(HashMap::new()));
     let (work_queue_sender, work_queue_receiver) = unbounded::<u64>();
     let (result_queue_sender, result_queue_receiver) = unbounded::<(u64, i8, i8)>();
-    let mut handles = Vec::new();
-    let n_threads = 16;
+    let finished = Arc::new(Mutex::new(false));
+
+    //This thread reads from unqiue.bin in reverse and sends values to worker threads
+    let mut file = File::open("C:/Users/evana/Desktop/Connect3/src/unique.bin").unwrap();
+    let file_size = file.metadata().unwrap().len();
+    let mut position = file_size as i64;
+    const CHUNK_SIZE: usize = 8;
+    let mut buffer = [0u8; CHUNK_SIZE];
+    let work_queue_sender_clone = work_queue_sender.clone();
+    let reader_handle = std::thread::spawn(move || loop {
+        let chunk_position = if position >= CHUNK_SIZE as i64 {
+            position - CHUNK_SIZE as i64
+        } else {
+            0
+        };
+        file.seek(SeekFrom::Start(chunk_position as u64)).unwrap();
+        let bytes_to_read = if position >= CHUNK_SIZE as i64 {
+            CHUNK_SIZE
+        } else {
+            position as usize
+        };
+        let bytes_read = file.read(&mut buffer).unwrap();
+        if bytes_read == 0 {
+            work_queue_sender_clone.send(0);
+            drop(work_queue_sender_clone);
+            break;
+        }
+        let _ = work_queue_sender_clone.send(u64::from_le_bytes(buffer));
+        position -= bytes_read as i64;
+        if position <= 0 {
+            work_queue_sender_clone.send(0);
+            drop(work_queue_sender_clone);
+            break;
+        }
+    });
+    println!("Reader Thread Spawned");
+
+    //Minimax worker threads
+    let mut worker_handles = Vec::new();
+    let n_threads = 14;
     for i in 0..n_threads {
         let work_queue_receiver = work_queue_receiver.clone();
         let work_queue_sender = work_queue_sender.clone();
         let result_queue_sender = result_queue_sender.clone();
         let game_value_clone = game_value.clone();
-        println!("Spawing Thread: {}", (i + 1).to_string());
+        let finished_clone = finished.clone();
+        println!("Spawing Worker Thread: {}", (i + 1).to_string());
         let handle = std::thread::spawn(move || loop {
-            match work_queue_receiver.recv() {
+            match work_queue_receiver.try_recv() {
                 Ok(num_to_process) => {
                     let board: Game = number_to_board(num_to_process);
                     let player = board.player;
@@ -433,104 +472,61 @@ fn minimax_tree() {
                         panic!("Chose non-existent state")
                     }
                     let _ = result_queue_sender.send((num_to_process, chosen_move, result));
-                }
-                Err(_) => break,
-            }
-        });
-        handles.push(handle);
-    }
-    println!("All Threads Spawned");
-    let mut file = File::open("C:/Users/evana/Desktop/Connect3/src/unique.bin").unwrap();
-    let file_size = file.metadata().unwrap().len();
-    let mut position = file_size as i64;
-    const CHUNK_SIZE: usize = 8;
-    let mut buffer = [0u8; CHUNK_SIZE];
-    let work_queue_sender_clone = work_queue_sender.clone();
-    let reader_handle = std::thread::spawn(move || loop {
-        let chunk_position = if position >= CHUNK_SIZE as i64 {
-            position - CHUNK_SIZE as i64
-        } else {
-            0
-        };
-        file.seek(SeekFrom::Start(chunk_position as u64)).unwrap();
-        let bytes_to_read = if position >= CHUNK_SIZE as i64 {
-            CHUNK_SIZE
-        } else {
-            position as usize
-        };
-        let bytes_read = file.read(&mut buffer).unwrap();
-        if bytes_read == 0 {
-            break; // Reached the beginning of the file
-        }
-
-        let _ = work_queue_sender_clone.send(u64::from_le_bytes(buffer));
-
-        position -= bytes_read as i64;
-        if position <= 0 {
-            break; // Ensure we don't read beyond the beginning of the file
-        }
-    });
-    let mut output = File::create("output.bin").unwrap();
-    let mut n: u32 = 0;
-    loop {
-        match result_queue_receiver.recv() {
-            Ok((a, b, c)) => {
-                n += 1;
-                if n % 10000000 == 0 {
-                    println!("{}", n);
-                }
-                let _ = output.write_all(&a.to_le_bytes());
-                let _ = output.write_all(&b.to_le_bytes());
-                let _ = output.write_all(&c.to_le_bytes());
-            }
-            Err(_) => {
-                println!("stupid!");
-                let mut to_break: bool = true;
-                for handle in &handles {
-                    if !handle.is_finished() {
-                        to_break = false;
-                        break;
+                    if num_to_process == 0 {
+                        *finished_clone.lock().unwrap() = true;
                     }
                 }
-                if to_break {
-                    break;
+                Err(_) => match finished_clone.try_lock() {
+                    Ok(done) => {
+                        if *done {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        continue;
+                    }
+                },
+            }
+        });
+        worker_handles.push(handle);
+    }
+    println!("All Worker Threads Spawned");
+
+    //This thread writes to output bin and txt files
+    let mut output_bin = File::create("output_bin.bin").unwrap();
+    let mut output_txt = File::create("output_txt.txt").unwrap();
+    let mut written: u32 = 0;
+    let writer_handle = std::thread::spawn(move || loop {
+        match result_queue_receiver.recv() {
+            Ok((a, b, c)) => {
+                written += 1;
+                if written % 10000000 == 0 {
+                    println!("{} / 548,638,747", written);
                 }
+                let _ = output_bin.write_all(&a.to_le_bytes());
+                let _ = output_bin.write_all(&b.to_le_bytes());
+                let _ = output_bin.write_all(&c.to_le_bytes());
+                let content = a.to_string() + &" " + &b.to_string() + &" " + &c.to_string() + &"\n";
+                output_txt.write_all(content.as_bytes()).unwrap();
+            }
+            Err(_) => {
+                break;
             }
         }
-    }
-    println!("Writing Finished");
+    });
+    println!("Writer Thread Spawned");
     reader_handle.join().unwrap();
-    work_queue_sender.send(0);
-    for handle in handles {
+    drop(work_queue_sender);
+    for handle in worker_handles {
         handle.join().unwrap();
     }
-    drop(work_queue_sender);
+    writer_handle.join().unwrap();
+    drop(result_queue_sender);
     println!("Done");
 }
 
-fn read_output_to_text() {
-    let mut file = File::open("C:/Users/evana/Desktop/Connect3/output.bin").unwrap();
-    let mut output = File::create("output.txt").unwrap();
-    let mut buffer = [0; 10];
-    let mut seen: HashSet<u64> = HashSet::new();
-    while let Ok(_) = file.read_exact(&mut buffer) {
-        let mut int64_bytes: [u8; 8] = Default::default();
-        int64_bytes.copy_from_slice(&buffer[0..8]);
-        let state_num = u64::from_le_bytes(int64_bytes);
-        let next_move: i8 = buffer[8] as i8;
-        let game_value: i8 = buffer[9] as i8;
-        let content = state_num.to_string()
-            + &" "
-            + &next_move.to_string()
-            + &" "
-            + &game_value.to_string()
-            + &"\n";
-        output.write_all(content.as_bytes()).unwrap();
-    }
-}
-
 fn main() {
-    
+    minimax_tree();
 }
 
 fn process() {
