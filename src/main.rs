@@ -528,6 +528,30 @@ fn minimax_tree() {
     println!("Writing Done");
 }
 
+fn sort_output() {
+    let mut file = File::open("C:/Users/evana/Desktop/Connect3/output_bin.bin").unwrap();
+    let mut output_sorted = File::create("output_sorted_bin.bin").unwrap();
+    let mut buffer = [0; 10];
+    let mut output_vec : Vec<(u64,i8,i8)> = Vec::new();
+    while let Ok(_) = file.read_exact(&mut buffer) {
+        let mut int64_bytes: [u8; 8] = Default::default();
+        int64_bytes.copy_from_slice(&buffer[0..8]);
+        let state_num = u64::from_le_bytes(int64_bytes);
+        let next_move : i8 = buffer[8] as i8;
+        let game_value : i8 = buffer[9] as i8;
+        output_vec.push((state_num,next_move,game_value));
+    }
+    println!("Data Loaded");
+    output_vec.sort_unstable_by_key(|&(state_num, _, _)| state_num);
+    println!("Sorted");
+    for (a,b,c) in output_vec {
+        let _ = output_sorted.write_all(&a.to_le_bytes());
+        let _ = output_sorted.write_all(&b.to_le_bytes());
+        let _ = output_sorted.write_all(&c.to_le_bytes());
+    }
+    println!("Sorted Data Written");
+}
+
 fn main() {
     minimax_tree();
 }
