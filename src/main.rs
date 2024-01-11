@@ -479,6 +479,7 @@ fn minimax_tree() {
                 Err(_) => match finished_clone.try_lock() {
                     Ok(done) => {
                         if *done {
+                            drop(work_queue_sender_clone);
                             break;
                         }
                     }
@@ -507,7 +508,7 @@ fn minimax_tree() {
                 let _ = output_bin.write_all(&b.to_le_bytes());
                 let _ = output_bin.write_all(&c.to_le_bytes());
                 let content = a.to_string() + &" " + &b.to_string() + &" " + &c.to_string() + &"\n";
-                output_txt.write_all(content.as_bytes()).unwrap();
+                let _ = output_txt.write_all(content.as_bytes());
             }
             Err(_) => {
                 break;
@@ -516,13 +517,15 @@ fn minimax_tree() {
     });
     println!("Writer Thread Spawned");
     reader_handle.join().unwrap();
+    println!("Reading Done");
     drop(work_queue_sender);
     for handle in worker_handles {
         handle.join().unwrap();
     }
+    println!("Working Done");
     writer_handle.join().unwrap();
     drop(result_queue_sender);
-    println!("Done");
+    println!("Writing Done");
 }
 
 fn main() {
@@ -551,7 +554,8 @@ fn generate() {
     let seen: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut handles = Vec::new();
     let (work_queue_sender, work_queue_receiver) = unbounded::<Game>();
-    let (result_queue_sender, result_queue_receiver) = unbounded::<(u64, u64)>();
+    let (result_queue_sender, result_queue_receiver) = unbounded::<u64>();
+    result_queue_sender.send(0);
     let _ = work_queue_sender.send(Game {
         board: make_new_board(),
         player: 1,
@@ -567,7 +571,6 @@ fn generate() {
             match work_queue_receiver.recv() {
                 Ok(state_to_process) => {
                     let mut seen_set = shared_set_clone.lock().unwrap();
-                    let state_to_process_num = board_to_number(&state_to_process.board);
                     if !is_over(&state_to_process) {
                         for next_state in
                             get_all_next_states(state_to_process.board, state_to_process.player)
@@ -580,7 +583,7 @@ fn generate() {
                             if seen_set.contains(&next_game_num) {
                                 continue;
                             }
-                            let _ = result_queue_sender.send((state_to_process_num, next_game_num));
+                            let _ = result_queue_sender.send(next_game_num);
                             seen_set.insert(next_game_num);
                             let _ = work_queue_sender.send(next_game);
                         }
@@ -592,13 +595,12 @@ fn generate() {
         handles.push(handle);
     }
     println!("All Threads Spawned");
-    let mut file = File::create("data.bin").unwrap();
+    let mut file = File::create("unique.bin").unwrap();
     println!("Starting File");
     loop {
         match result_queue_receiver.recv() {
-            Ok((a, b)) => {
+            Ok(a) => {
                 let _ = file.write_all(&a.to_le_bytes());
-                let _ = file.write_all(&b.to_le_bytes());
             }
             Err(_) => {
                 println!("stupid!");
@@ -615,7 +617,6 @@ fn generate() {
             }
         }
     }
-    println!("Writing Finished");
     for handle in handles {
         handle.join().unwrap();
     }
