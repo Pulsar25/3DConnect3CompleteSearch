@@ -235,22 +235,6 @@ fn number_to_board(mut num: u64) -> Game {
     return output;
 }
 
-fn write_unique() {
-    let mut file = File::open("data.bin").unwrap();
-    let mut write_file = File::create("unique.bin").unwrap();
-    let mut buffer = [0; 8];
-    let mut seen: HashSet<u64> = HashSet::new();
-    while let Ok(_) = file.read_exact(&mut buffer) {
-        let num1 = u64::from_le_bytes(buffer);
-        file.read_exact(&mut buffer).unwrap();
-        let num2 = u64::from_le_bytes(buffer);
-        if !seen.contains(&num2) {
-            seen.insert(num2);
-            let _ = write_file.write_all(&num2.to_le_bytes());
-        }
-    }
-}
-
 fn read_bit_at_position(file_path: &str, position: u64) -> std::io::Result<bool> {
     let mut file = OpenOptions::new().read(true).open(file_path)?;
 
@@ -295,7 +279,7 @@ fn get_all_next_numbers(g: Game) -> Vec<u64> {
 }
 
 fn log_base_3(x: f64) -> f64 {
-    let result = (x.ln() / 3f64.ln());
+    let result = x.ln() / 3f64.ln();
     result
 }
 
@@ -347,14 +331,14 @@ fn minimax_tree() {
         };
         let bytes_read = file.read(&mut buffer).unwrap();
         if bytes_read == 0 {
-            work_queue_sender_clone.send(0);
+            let _ = work_queue_sender_clone.send(0);
             drop(work_queue_sender_clone);
             break;
         }
         let _ = work_queue_sender_clone.send(u64::from_le_bytes(buffer));
         position -= bytes_read as i64;
         if position <= 0 {
-            work_queue_sender_clone.send(0);
+            let _ = work_queue_sender_clone.send(0);
             drop(work_queue_sender_clone);
             break;
         }
@@ -479,7 +463,7 @@ fn minimax_tree() {
                 Err(_) => match finished_clone.try_lock() {
                     Ok(done) => {
                         if *done {
-                            drop(work_queue_sender_clone);
+                            drop(work_queue_sender);
                             break;
                         }
                     }
@@ -553,25 +537,7 @@ fn sort_output() {
 }
 
 fn main() {
-    minimax_tree();
-}
-
-fn process() {
-    let file = File::open("C:\\Users\\evana\\Desktop\\Connect3\\input.txt").unwrap();
-    let reader = BufReader::new(file);
-    let mut output = File::create("data.bin").unwrap();
-    let mut n: u32 = 0;
-    for line in reader.lines() {
-        if let Ok(line) = line {
-            n += 1;
-            if (n % 10000000 == 0) {
-                println!("{}", n);
-            }
-            let substrings: Vec<&str> = line.split_whitespace().collect();
-            let _ = output.write_all(&substrings[0].parse::<u64>().unwrap().to_le_bytes());
-            let _ = output.write_all(&substrings[1].parse::<u64>().unwrap().to_le_bytes());
-        }
-    }
+    sort_output();
 }
 
 fn generate() {
@@ -579,7 +545,7 @@ fn generate() {
     let mut handles = Vec::new();
     let (work_queue_sender, work_queue_receiver) = unbounded::<Game>();
     let (result_queue_sender, result_queue_receiver) = unbounded::<u64>();
-    result_queue_sender.send(0);
+    let _ = result_queue_sender.send(0);
     let _ = work_queue_sender.send(Game {
         board: make_new_board(),
         player: 1,
@@ -618,9 +584,9 @@ fn generate() {
         });
         handles.push(handle);
     }
-    println!("All Threads Spawned");
+    println!("All Worker Threads Spawned");
     let mut file = File::create("unique.bin").unwrap();
-    println!("Starting File");
+    println!("Starting File Writing");
     loop {
         match result_queue_receiver.recv() {
             Ok(a) => {
