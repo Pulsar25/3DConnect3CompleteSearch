@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::io::{BufRead, BufReader, Error, Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 extern crate crossbeam;
 use crossbeam::channel::unbounded;
 use std::fs::{File, OpenOptions};
@@ -304,54 +304,176 @@ fn is_full(g: &Game) -> bool {
     true
 }
 
-fn minimax_tree() {
+fn get_best_move(state_num: u64) -> Option<(i8, i8)> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open("C:/Users/evana/Desktop/Connect3/output_sorted_bin.bin")
+        .unwrap();
+    let mut low: i64 = -1;
+    let mut high: i64 = 548638748;
+    while high > low + 1 {
+        let mid: i64 = (low + high) / 2;
+        file.seek(SeekFrom::Start((mid as u64) * 10)).unwrap();
+        let mut buffer = [0u8; 8];
+        file.read_exact(&mut buffer).unwrap();
+        let mut int64_bytes: [u8; 8] = Default::default();
+        int64_bytes.copy_from_slice(&buffer[0..8]);
+        let found_state_num = u64::from_le_bytes(int64_bytes);
+        if found_state_num == state_num {
+            file.seek(SeekFrom::Start((mid as u64) * 10 + 8)).unwrap();
+            let mut buffer = [0u8; 2];
+            file.read_exact(&mut buffer).unwrap();
+            let mut first_byte: i8 = buffer[0] as i8;
+            let mut second_byte: i8 = buffer[1] as i8;
+            return Some((first_byte, second_byte));
+        } else if found_state_num > state_num {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    return None;
+}
+
+fn stored_move_to_human_move(stored_move: i8) -> i8 {
+    if stored_move == -1 {
+        return -1;
+    }
+    stored_move / 3
+}
+
+fn game_to_str(g: Game) -> String {
+    let mut output: String = "".to_string();
+    for z in 0..3 {
+        for x in 0..3 {
+            let content = g.board.data[x][0][z].to_string()
+                + &" "
+                + &g.board.data[x][1][z].to_string()
+                + &" "
+                + &g.board.data[x][2][z].to_string()
+                + &"\n";
+            output.push_str(&content);
+        }
+        output.push_str(&"\n");
+    }
+    return output;
+}
+
+fn solver() {
+    loop {
+        let mut input = String::new();
+        println!("Enter a State Number:");
+        std::io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read line");
+        let number: Result<i64, _> = input.trim().parse();
+        match number {
+            Ok(parsed_number) => {
+                let (output, winner) = get_best_move(parsed_number as u64).unwrap();
+                let output = stored_move_to_human_move(output);
+                let mut g: Game = number_to_board(parsed_number as u64);
+                if output != -1 {
+                    let _ = place_new_piece(
+                        &mut g.board,
+                        (output / 3) as usize,
+                        (output % 3) as usize,
+                        g.player,
+                    );
+                }
+                let next_number: u64 = board_to_number(&g.board);
+                println!(
+                    "Down: {}, Right: {}, Next State: {}, Winner: {}",
+                    (output / 3).to_string(),
+                    (output % 3).to_string(),
+                    next_number.to_string(),
+                    winner.to_string()
+                );
+                println!("{}", game_to_str(g));
+            }
+            Err(_) => {
+                println!("Failed to parse an integer, quitting");
+                break;
+            }
+        }
+    }
+}
+
+fn generate_unique() -> Arc<Mutex<Vec<u64>>> {
+    let seen: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
+    let mut handles = Vec::new();
+    let mut unique_stack: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+    unique_stack.lock().unwrap().push(0);
+    let (work_queue_sender, work_queue_receiver) = unbounded::<Game>();
+    let _ = work_queue_sender.send(Game {
+        board: make_new_board(),
+        player: 1,
+    });
+    let n_threads = 16;
+    for i in 0..n_threads {
+        let mut unique_stack_clone = Arc::clone(&unique_stack);
+        let shared_set_clone = Arc::clone(&seen);
+        let work_queue_receiver = work_queue_receiver.clone();
+        let work_queue_sender = work_queue_sender.clone();
+        println!("Spawing Thread: {}", (i + 1).to_string());
+        let handle = std::thread::spawn(move || loop {
+            match work_queue_receiver.recv() {
+                Ok(state_to_process) => {
+                    let mut seen_set = shared_set_clone.lock().unwrap();
+                    if !is_over(&state_to_process) {
+                        for next_state in
+                            get_all_next_states(state_to_process.board, state_to_process.player)
+                        {
+                            let next_game = Game {
+                                board: next_state,
+                                player: switch_player(state_to_process.player),
+                            };
+                            let next_game_num = board_to_number(&next_game.board);
+                            if seen_set.contains(&next_game_num) {
+                                continue;
+                            }
+                            unique_stack_clone.lock().unwrap().push(next_game_num);
+                            seen_set.insert(next_game_num);
+                            let _ = work_queue_sender.send(next_game);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        });
+        handles.push(handle);
+    }
+    println!("All Unique State Worker Threads Spawned");
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    drop(work_queue_sender);
+    println!("Done With Unique State Generation");
+    return unique_stack.clone();
+}
+
+fn minimax_tree(unique_stack: Arc<Mutex<Vec<u64>>>) {
     let game_value: Arc<Mutex<HashMap<u64, i8>>> = Arc::new(Mutex::new(HashMap::new()));
     let (work_queue_sender, work_queue_receiver) = unbounded::<u64>();
-    let (result_queue_sender, result_queue_receiver) = unbounded::<(u64, i8, i8)>();
     let finished = Arc::new(Mutex::new(false));
-
-    //This thread reads from unqiue.bin in reverse and sends values to worker threads
-    let mut file = File::open("C:/Users/evana/Desktop/Connect3/src/unique.bin").unwrap();
-    let file_size = file.metadata().unwrap().len();
-    let mut position = file_size as i64;
-    const CHUNK_SIZE: usize = 8;
-    let mut buffer = [0u8; CHUNK_SIZE];
+    let output_set: Arc<Mutex<BTreeSet<(u64, i8, i8)>>> = Arc::new(Mutex::new(BTreeSet::new()));
+    //This thread reads from unqiue stack and sends values to worker threads
     let work_queue_sender_clone = work_queue_sender.clone();
     let reader_handle = std::thread::spawn(move || loop {
-        let chunk_position = if position >= CHUNK_SIZE as i64 {
-            position - CHUNK_SIZE as i64
-        } else {
-            0
-        };
-        file.seek(SeekFrom::Start(chunk_position as u64)).unwrap();
-        let bytes_to_read = if position >= CHUNK_SIZE as i64 {
-            CHUNK_SIZE
-        } else {
-            position as usize
-        };
-        let bytes_read = file.read(&mut buffer).unwrap();
-        if bytes_read == 0 {
-            let _ = work_queue_sender_clone.send(0);
-            drop(work_queue_sender_clone);
-            break;
-        }
-        let _ = work_queue_sender_clone.send(u64::from_le_bytes(buffer));
-        position -= bytes_read as i64;
-        if position <= 0 {
-            let _ = work_queue_sender_clone.send(0);
-            drop(work_queue_sender_clone);
-            break;
+        let mut unique_stack = unique_stack.lock().unwrap();
+        while !unique_stack.is_empty() {
+            let value: u64 = unique_stack.pop().unwrap();
+            let _ = work_queue_sender_clone.send(value);
         }
     });
     println!("Reader Thread Spawned");
 
     //Minimax worker threads
     let mut worker_handles = Vec::new();
-    let n_threads = 14;
+    let n_threads = 15;
     for i in 0..n_threads {
+        let output_set = output_set.clone();
         let work_queue_receiver = work_queue_receiver.clone();
         let work_queue_sender = work_queue_sender.clone();
-        let result_queue_sender = result_queue_sender.clone();
         let game_value_clone = game_value.clone();
         let finished_clone = finished.clone();
         println!("Spawing Worker Thread: {}", (i + 1).to_string());
@@ -366,12 +488,15 @@ fn minimax_tree() {
                             .lock()
                             .unwrap()
                             .insert(num_to_process, winner);
-                        let _ = result_queue_sender.send((num_to_process, -1, winner));
+                        output_set
+                            .lock()
+                            .unwrap()
+                            .insert((num_to_process, -1, winner));
                         continue;
                     }
                     if is_full(&board) {
                         game_value_clone.lock().unwrap().insert(num_to_process, 0);
-                        let _ = result_queue_sender.send((num_to_process, -1, 0));
+                        output_set.lock().unwrap().insert((num_to_process, -1, 0));
                         continue;
                     }
                     let next_game_nums: Vec<u64> = get_all_next_numbers(board);
@@ -455,7 +580,10 @@ fn minimax_tree() {
                         );
                         panic!("Chose non-existent state")
                     }
-                    let _ = result_queue_sender.send((num_to_process, chosen_move, result));
+                    output_set
+                        .lock()
+                        .unwrap()
+                        .insert((num_to_process, chosen_move, result));
                     if num_to_process == 0 {
                         *finished_clone.lock().unwrap() = true;
                     }
@@ -476,30 +604,6 @@ fn minimax_tree() {
         worker_handles.push(handle);
     }
     println!("All Worker Threads Spawned");
-
-    //This thread writes to output bin and txt files
-    let mut output_bin = File::create("output_bin.bin").unwrap();
-    let mut output_txt = File::create("output_txt.txt").unwrap();
-    let mut written: u32 = 0;
-    let writer_handle = std::thread::spawn(move || loop {
-        match result_queue_receiver.recv() {
-            Ok((a, b, c)) => {
-                written += 1;
-                if written % 10000000 == 0 {
-                    println!("{} / 548,638,747", written);
-                }
-                let _ = output_bin.write_all(&a.to_le_bytes());
-                let _ = output_bin.write_all(&b.to_le_bytes());
-                let _ = output_bin.write_all(&c.to_le_bytes());
-                let content = a.to_string() + &" " + &b.to_string() + &" " + &c.to_string() + &"\n";
-                let _ = output_txt.write_all(content.as_bytes());
-            }
-            Err(_) => {
-                break;
-            }
-        }
-    });
-    println!("Writer Thread Spawned");
     reader_handle.join().unwrap();
     println!("Reading Done");
     drop(work_queue_sender);
@@ -507,199 +611,27 @@ fn minimax_tree() {
         handle.join().unwrap();
     }
     println!("Working Done");
-    writer_handle.join().unwrap();
-    drop(result_queue_sender);
+    println!("Writing Started");
+    //This thread writes to output bin and txt files
+    let mut output_bin = File::create("sorted_output.bin").unwrap();
+    let mut written: u32 = 0;
+    let output_set = output_set.lock().unwrap();
+    for element in output_set.iter() {
+        written += 1;
+        if written % 10000000 == 0 {
+            println!("{} / 548,638,747", written);
+        }
+        let _ = output_bin.write_all(&(element.0).to_le_bytes());
+        let _ = output_bin.write_all(&(element.1).to_le_bytes());
+        let _ = output_bin.write_all(&(element.2).to_le_bytes());
+    }
     println!("Writing Done");
 }
 
-fn get_best_move(state_num: u64) -> Option<(i8, i8)> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .open("C:/Users/evana/Desktop/Connect3/output_sorted_bin.bin")
-        .unwrap();
-    let mut low: i64 = -1;
-    let mut high: i64 = 548638748;
-    while high > low + 1 {
-        let mid: i64 = (low + high) / 2;
-        file.seek(SeekFrom::Start((mid as u64) * 10)).unwrap();
-        let mut buffer = [0u8; 8];
-        file.read_exact(&mut buffer).unwrap();
-        let mut int64_bytes: [u8; 8] = Default::default();
-        int64_bytes.copy_from_slice(&buffer[0..8]);
-        let found_state_num = u64::from_le_bytes(int64_bytes);
-        if found_state_num == state_num {
-            file.seek(SeekFrom::Start((mid as u64) * 10 + 8)).unwrap();
-            let mut buffer = [0u8; 2];
-            file.read_exact(&mut buffer).unwrap();
-            let mut first_byte: i8 = buffer[0] as i8;
-            let mut second_byte: i8 = buffer[1] as i8;
-            return Some((first_byte, second_byte));
-        } else if found_state_num > state_num {
-            high = mid;
-        } else {
-            low = mid;
-        }
-    }
-    return None;
-}
-
-fn sort_output() {
-    let mut file = File::open("C:/Users/evana/Desktop/Connect3/output_bin.bin").unwrap();
-    let mut output_sorted = File::create("output_sorted_bin.bin").unwrap();
-    let mut buffer = [0; 10];
-    let mut output_vec: Vec<(u64, i8, i8)> = Vec::new();
-    while let Ok(_) = file.read_exact(&mut buffer) {
-        let mut int64_bytes: [u8; 8] = Default::default();
-        int64_bytes.copy_from_slice(&buffer[0..8]);
-        let state_num = u64::from_le_bytes(int64_bytes);
-        let next_move: i8 = buffer[8] as i8;
-        let game_value: i8 = buffer[9] as i8;
-        output_vec.push((state_num, next_move, game_value));
-    }
-    println!("Data Loaded");
-    output_vec.sort_unstable_by_key(|&(state_num, _, _)| state_num);
-    println!("Sorted");
-    for (a, b, c) in output_vec {
-        let _ = output_sorted.write_all(&a.to_le_bytes());
-        let _ = output_sorted.write_all(&b.to_le_bytes());
-        let _ = output_sorted.write_all(&c.to_le_bytes());
-    }
-    println!("Sorted Data Written");
-}
-
-fn stored_move_to_human_move(stored_move: i8) -> i8 {
-    if stored_move == -1 {
-        return -1;
-    }
-    stored_move / 3
-}
-
-fn game_to_str(g: Game) -> String {
-    let mut output: String = "".to_string();
-    for z in 0..3 {
-        for x in 0..3 {
-            let content = g.board.data[x][0][z].to_string()
-                + &" "
-                + &g.board.data[x][1][z].to_string()
-                + &" "
-                + &g.board.data[x][2][z].to_string()
-                + &"\n";
-            output.push_str(&content);
-        }
-        output.push_str(&"\n");
-    }
-    return output;
+fn generate() {
+    minimax_tree(generate_unique());
 }
 
 fn main() {
-    loop {
-        let mut input = String::new();
-        println!("Enter a State Number:");
-        std::io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read line");
-        let number: Result<i64, _> = input.trim().parse();
-        match number {
-            Ok(parsed_number) => {
-                let (output, winner) = get_best_move(parsed_number as u64).unwrap();
-                let output = stored_move_to_human_move(output);
-                let mut g: Game = number_to_board(parsed_number as u64);
-                if output != -1 {
-                    let _ = place_new_piece(
-                        &mut g.board,
-                        (output / 3) as usize,
-                        (output % 3) as usize,
-                        g.player,
-                    );
-                }
-                let next_number: u64 = board_to_number(&g.board);
-                println!(
-                    "Down: {}, Right: {}, Next State: {}, Winner: {}",
-                    (output / 3).to_string(),
-                    (output % 3).to_string(),
-                    next_number.to_string(),
-                    winner.to_string()
-                );
-                println!("{}", game_to_str(g));
-            }
-            Err(_) => {
-                println!("Failed to parse an integer, quitting");
-                break;
-            }
-        }
-    }
-}
-
-fn generate() {
-    let seen: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
-    let mut handles = Vec::new();
-    let (work_queue_sender, work_queue_receiver) = unbounded::<Game>();
-    let (result_queue_sender, result_queue_receiver) = unbounded::<u64>();
-    let _ = result_queue_sender.send(0);
-    let _ = work_queue_sender.send(Game {
-        board: make_new_board(),
-        player: 1,
-    });
-    let n_threads = 16;
-    for i in 0..n_threads {
-        let shared_set_clone = Arc::clone(&seen);
-        let work_queue_receiver = work_queue_receiver.clone();
-        let work_queue_sender = work_queue_sender.clone();
-        let result_queue_sender = result_queue_sender.clone();
-        println!("Spawing Thread: {}", (i + 1).to_string());
-        let handle = std::thread::spawn(move || loop {
-            match work_queue_receiver.recv() {
-                Ok(state_to_process) => {
-                    let mut seen_set = shared_set_clone.lock().unwrap();
-                    if !is_over(&state_to_process) {
-                        for next_state in
-                            get_all_next_states(state_to_process.board, state_to_process.player)
-                        {
-                            let next_game = Game {
-                                board: next_state,
-                                player: switch_player(state_to_process.player),
-                            };
-                            let next_game_num = board_to_number(&next_game.board);
-                            if seen_set.contains(&next_game_num) {
-                                continue;
-                            }
-                            let _ = result_queue_sender.send(next_game_num);
-                            seen_set.insert(next_game_num);
-                            let _ = work_queue_sender.send(next_game);
-                        }
-                    }
-                }
-                Err(_) => break,
-            }
-        });
-        handles.push(handle);
-    }
-    println!("All Worker Threads Spawned");
-    let mut file = File::create("unique.bin").unwrap();
-    println!("Starting File Writing");
-    loop {
-        match result_queue_receiver.recv() {
-            Ok(a) => {
-                let _ = file.write_all(&a.to_le_bytes());
-            }
-            Err(_) => {
-                println!("stupid!");
-                let mut to_break: bool = true;
-                for handle in &handles {
-                    if !handle.is_finished() {
-                        to_break = false;
-                        break;
-                    }
-                }
-                if to_break {
-                    break;
-                }
-            }
-        }
-    }
-    for handle in handles {
-        handle.join().unwrap();
-    }
-    drop(work_queue_sender);
-    println!("Done");
+    generate();
 }
