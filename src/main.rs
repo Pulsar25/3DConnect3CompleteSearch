@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
-use std::io::{BufRead, BufReader, Error, Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::{Arc, Mutex};
 extern crate crossbeam;
 use crossbeam::channel::unbounded;
 use std::fs::{File, OpenOptions};
@@ -235,42 +235,6 @@ fn number_to_board(mut num: u64) -> Game {
     return output;
 }
 
-fn read_bit_at_position(file_path: &str, position: u64) -> std::io::Result<bool> {
-    let mut file = OpenOptions::new().read(true).open(file_path)?;
-
-    file.seek(SeekFrom::Start(position / 8))?;
-
-    let mut buffer = [0u8; 1];
-    file.read_exact(&mut buffer)?;
-
-    let byte = buffer[0];
-    let bit_position = position % 8;
-    let bit_value = byte & (1 << (7 - bit_position));
-
-    Ok(bit_value != 0)
-}
-
-fn write_bit_at_position(file_path: &str, position: u64, value: bool) -> std::io::Result<()> {
-    let mut file = OpenOptions::new().read(true).write(true).open(file_path)?;
-
-    file.seek(SeekFrom::Start(position / 8))?;
-
-    let mut buffer = [0u8; 1];
-    file.read_exact(&mut buffer)?;
-
-    let bit_position = position % 8;
-    if value {
-        buffer[0] |= 1 << (7 - bit_position);
-    } else {
-        buffer[0] &= !(1 << (7 - bit_position));
-    }
-
-    file.seek(SeekFrom::Start(position / 8))?;
-    file.write_all(&buffer)?;
-
-    Ok(())
-}
-
 fn get_all_next_numbers(g: Game) -> Vec<u64> {
     get_all_next_states(g.board, g.player)
         .iter()
@@ -323,8 +287,8 @@ fn get_best_move(state_num: u64) -> Option<(i8, i8)> {
             file.seek(SeekFrom::Start((mid as u64) * 10 + 8)).unwrap();
             let mut buffer = [0u8; 2];
             file.read_exact(&mut buffer).unwrap();
-            let mut first_byte: i8 = buffer[0] as i8;
-            let mut second_byte: i8 = buffer[1] as i8;
+            let first_byte: i8 = buffer[0] as i8;
+            let second_byte: i8 = buffer[1] as i8;
             return Some((first_byte, second_byte));
         } else if found_state_num > state_num {
             high = mid;
@@ -401,7 +365,7 @@ fn solver() {
 fn generate_unique() -> Arc<Mutex<Vec<u64>>> {
     let seen: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut handles = Vec::new();
-    let mut unique_stack: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+    let unique_stack: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     unique_stack.lock().unwrap().push(0);
     let (work_queue_sender, work_queue_receiver) = unbounded::<Game>();
     let _ = work_queue_sender.send(Game {
@@ -409,16 +373,14 @@ fn generate_unique() -> Arc<Mutex<Vec<u64>>> {
         player: 1,
     });
     let n_threads = 16;
-    for i in 0..n_threads {
-        let mut unique_stack_clone = Arc::clone(&unique_stack);
+    for _ in 0..n_threads {
+        let unique_stack_clone = Arc::clone(&unique_stack);
         let shared_set_clone = Arc::clone(&seen);
         let work_queue_receiver = work_queue_receiver.clone();
         let work_queue_sender = work_queue_sender.clone();
-        println!("Spawing Thread: {}", (i + 1).to_string());
         let handle = std::thread::spawn(move || loop {
-            match work_queue_receiver.recv() {
+            match work_queue_receiver.try_recv() {
                 Ok(state_to_process) => {
-                    let mut seen_set = shared_set_clone.lock().unwrap();
                     if !is_over(&state_to_process) {
                         for next_state in
                             get_all_next_states(state_to_process.board, state_to_process.player)
@@ -427,6 +389,10 @@ fn generate_unique() -> Arc<Mutex<Vec<u64>>> {
                                 board: next_state,
                                 player: switch_player(state_to_process.player),
                             };
+                            let mut seen_set = shared_set_clone.lock().unwrap();                     
+                            if seen_set.len() % 10000000 == 0 {
+                                println!("{} / 548,638,747", seen_set.len().to_string());
+                            }
                             let next_game_num = board_to_number(&next_game.board);
                             if seen_set.contains(&next_game_num) {
                                 continue;
@@ -437,7 +403,23 @@ fn generate_unique() -> Arc<Mutex<Vec<u64>>> {
                         }
                     }
                 }
-                Err(_) => break,
+                Err(_) => {
+                    match shared_set_clone.lock() {
+                        Ok(seen_set) => {
+                            println!("Lock acquired!, {}", seen_set.len().to_string());
+                            if seen_set.len() >= 548638746 {
+                                drop(work_queue_sender);
+                                break;
+                            } else {
+                                continue;
+                            }
+                        }
+                        Err(_) => {
+                            println!("Lock failed!");
+                            continue;
+                        }
+                    }
+                }
             }
         });
         handles.push(handle);
@@ -465,18 +447,17 @@ fn minimax_tree(unique_stack: Arc<Mutex<Vec<u64>>>) {
             let _ = work_queue_sender_clone.send(value);
         }
     });
-    println!("Reader Thread Spawned");
+    println!("Unique Stack Reader Thread Spawned");
 
     //Minimax worker threads
     let mut worker_handles = Vec::new();
     let n_threads = 15;
-    for i in 0..n_threads {
+    for _ in 0..n_threads {
         let output_set = output_set.clone();
         let work_queue_receiver = work_queue_receiver.clone();
         let work_queue_sender = work_queue_sender.clone();
         let game_value_clone = game_value.clone();
         let finished_clone = finished.clone();
-        println!("Spawing Worker Thread: {}", (i + 1).to_string());
         let handle = std::thread::spawn(move || loop {
             match work_queue_receiver.try_recv() {
                 Ok(num_to_process) => {
@@ -626,6 +607,7 @@ fn minimax_tree(unique_stack: Arc<Mutex<Vec<u64>>>) {
         let _ = output_bin.write_all(&(element.2).to_le_bytes());
     }
     println!("Writing Done");
+    println!("Done");
 }
 
 fn generate() {
